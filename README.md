@@ -228,9 +228,13 @@ yt-dlp --extractor-args "youtube:player_client=web_creator,tv_downgraded,android
 yt-dlp --extractor-args "youtube:player_client=mweb,tv_downgraded,web" URL
 ```
 
-### &#x1F510; Strategy 2: PO Token Auto-Generation
+### &#x1F510; Strategy 2: PO Token Auto-Generation (THE KEY FIX)
 
-PO Tokens (Proof-of-Origin) prove you're not a bot:
+> &#x1F3AF; **This is the #1 fix that actually solved our production issues.** Without proper PO Token setup, datacenter servers get blocked even with client rotation.
+
+PO Tokens (Proof-of-Origin) prove to YouTube that you're not a bot. There are two modes:
+
+**Mode A: Plugin Only (for personal use)**
 
 ```bash
 # Install the PO Token provider plugin
@@ -243,7 +247,25 @@ yt-dlp --js-runtimes node \
   URL
 ```
 
-> &#x1F4A1; The plugin generates and caches PO Tokens automatically (valid ~6 hours).
+**Mode B: Dedicated PO Token Server (for cloud/production - RECOMMENDED)**
+
+```bash
+# 1. Clone and build the PO Token server
+git clone https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git
+cd bgutil-ytdlp-pot-provider/server
+npm ci && npx tsc
+
+# 2. Start the server (runs on port 4416)
+node build/main.js &
+
+# 3. CRITICAL: Set this env var so yt-dlp connects to the server
+export YT_DLP_POT_PROVIDER_URL="http://127.0.0.1:4416"
+
+# 4. Now yt-dlp automatically uses the PO Token server
+yt-dlp --extractor-args "youtube:player_client=web,android_vr,tv_downgraded" URL
+```
+
+> &#x1F6A8; **Common mistake:** Running the PO Token server WITHOUT setting `YT_DLP_POT_PROVIDER_URL`. The server runs fine but yt-dlp doesn't know it exists! This single env var was the fix that solved our production bot-blocking issues.
 
 ### &#x1F9F9; Strategy 3: Clear Cache Regularly
 
@@ -342,44 +364,45 @@ yt-dlp --proxy socks5://127.0.0.1:1080 URL
 
 ### &#x1F3D7;&#xFE0F; Production Architecture
 
-> This is the exact architecture powering [**OhmyYOUTUBE**](https://ohmyyoutube.bml-enm.com) — a production YouTube downloader serving real users worldwide.
+> This is the exact architecture running in production, serving real users worldwide.
 
 ```
   +-------------------------------------------------------+
   |                 Docker Container                       |
   |                                                        |
-  |   +-------------+    +----------------+                |
-  |   | wireproxy   |--->| SOCKS5 :1080   |                |
-  |   | (WARP)      |    | Cloudflare IP  |                |
-  |   +-------------+    +----------------+                |
-  |         |                    |                         |
-  |   +-------------+    +----------------+                |
-  |   | bgutil      |--->| PO Token :4416 |                |
-  |   | (PO Token)  |    | Auto-refresh   |                |
-  |   +-------------+    +----------------+                |
-  |         |                    |                         |
-  |   +-------------+    +----------------+                |
-  |   | yt-dlp      |--->| Uses both      |                |
-  |   |             |    | automatically  |                |
-  |   +-------------+    +----------------+                |
+  |   +------------------+    +--------------------+       |
+  |   | bgutil PO Token  |--->| HTTP :4416         |       |
+  |   | Server (Node.js) |    | Auto-generates     |       |
+  |   |                  |    | YouTube auth tokens |       |
+  |   +------------------+    +--------------------+       |
+  |         |                          |                   |
+  |         |  YT_DLP_POT_PROVIDER_URL |                   |
+  |         |  = http://127.0.0.1:4416 |                   |
+  |         v                          v                   |
+  |   +------------------+    +--------------------+       |
+  |   | yt-dlp           |--->| 5 client strategies|       |
+  |   | + PO Token plugin|    | + free proxy pool  |       |
+  |   +------------------+    +--------------------+       |
   |         |                                              |
-  |   +-------------+    +----------------+                |
-  |   | Flask       |--->| HTTP :8080     |                |
-  |   | Gunicorn    |    | Web Interface  |                |
-  |   +-------------+    +----------------+                |
+  |   +------------------+    +--------------------+       |
+  |   | Flask / Gunicorn |--->| HTTP :8080         |       |
+  |   |                  |    | Web Interface       |       |
+  |   +------------------+    +--------------------+       |
   |                                                        |
   +-------------------------------------------------------+
 ```
+
+> &#x1F4A1; **The critical connection:** `YT_DLP_POT_PROVIDER_URL` env var links yt-dlp to the PO Token server. Without it, the server runs but yt-dlp ignores it.
 
 **5-Layer Defense System:**
 
 | Layer | Defense | Description |
 |:-----:|:--------|:------------|
-| 1 | **Client Rotation** | 5 player_client strategies, auto-fallback on failure |
-| 2 | **PO Token** | bgutil server generates authentication tokens automatically |
-| 3 | **WARP Proxy** | Routes through Cloudflare IP instead of datacenter IP |
+| 1 | **PO Token Server** | bgutil generates auth tokens + `YT_DLP_POT_PROVIDER_URL` connects to yt-dlp **(THE KEY FIX)** |
+| 2 | **Client Rotation** | 5 player_client strategies, auto-fallback on failure |
+| 3 | **Free Proxy Pool** | Auto-fetches proxies from ProxyScrape, rotates on failure |
 | 4 | **Cache Management** | Auto-clears stale cache every 15 minutes |
-| 5 | **Retry + Backoff** | Up to 5 attempts with exponential backoff between retries |
+| 5 | **Retry + Backoff** | Up to 15 attempts (5 direct + 10 proxy) with random delays |
 
 <br>
 
@@ -642,7 +665,8 @@ Your server has a datacenter IP which YouTube blocks at the network level. This 
 
 | Version | Date | Changes |
 |:--------|:-----|:--------|
-| **v2.0.0** | 2026-03-13 | Bot detection bypass, cloud deployment guide, WARP proxy, PO Token, 5-layer defense, client rotation |
+| **v2.1.0** | 2026-03-13 | PO Token server mode (`YT_DLP_POT_PROVIDER_URL`), free proxy auto-rotation, production-tested fix |
+| **v2.0.0** | 2026-03-13 | Bot detection bypass, cloud deployment guide, WARP proxy, 5-layer defense, client rotation |
 | **v1.0.0** | 2026-03-01 | Initial release: SABR quality fix, format sort, multi-client strategy |
 
 <br>
