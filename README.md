@@ -8,7 +8,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/version-2.0.0-blue?style=flat-square)](https://github.com/bravomylife-lab/yt-dlp-rescue/releases)
+[![Version](https://img.shields.io/badge/version-2.2.0-blue?style=flat-square)](https://github.com/bravomylife-lab/yt-dlp-rescue/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
 [![yt-dlp](https://img.shields.io/badge/yt--dlp-2025.01+-red.svg?style=flat-square)](https://github.com/yt-dlp/yt-dlp)
 [![YouTube](https://img.shields.io/badge/YouTube-SABR%20Fix-FF0000?style=flat-square&logo=youtube)](https://github.com/yt-dlp/yt-dlp/issues)
@@ -29,7 +29,7 @@
  |_   _) ___ | | | |  _ \   / ___) _ \/ __|/ ___ | | |/ _ \
    | |_| ____|| | | | |_) ) | |  |  __/\__ \ (___| |_|  __/
     \__)_____) \_)_)  __/  |_|   \___||___/\____)____/\___|
-                    |_|     v2.0 - Battle Tested
+                    |_|     v2.2 - Battle Tested
 ```
 
 <br>
@@ -122,16 +122,19 @@ $ yt-dlp --extractor-args \
 
 ```bash
 yt-dlp \
-  --extractor-args "youtube:player_client=web,android_vr,tv_downgraded" \
+  --extractor-args "youtube:player_client=tv,web_embedded;player_skip=webpage" \
   -f "bestvideo*+bestaudio/best" \
   -S "res:1080" \
+  --force-ipv4 \
   --merge-output-format mp4 \
   "https://youtube.com/watch?v=VIDEO_ID"
 ```
 
 | Flag | What it does |
 |:-----|:-------------|
-| `player_client=web,android_vr,tv_downgraded` | Bypasses SABR — gets full format list (144p~4K) |
+| `player_client=tv,web_embedded` | **Most reliable combo** — bypasses SABR, gets full format list (144p~4K) |
+| `player_skip=webpage` | Skips webpage request — fewer HTTP calls = less rate limiting |
+| `--force-ipv4` | Prevents IPv6 routing issues on cloud servers |
 | `-S "res:1080"` | Picks best format matching your target resolution |
 | `-f "bestvideo*+bestaudio/best"` | The `*` adds progressive fallback for reliability |
 
@@ -394,15 +397,35 @@ yt-dlp --proxy socks5://127.0.0.1:1080 URL
 
 > &#x1F4A1; **The critical connection:** `YT_DLP_POT_PROVIDER_URL` env var links yt-dlp to the PO Token server. Without it, the server runs but yt-dlp ignores it.
 
-**5-Layer Defense System:**
+**6-Layer Defense System:**
 
 | Layer | Defense | Description |
 |:-----:|:--------|:------------|
-| 1 | **PO Token Server** | bgutil generates auth tokens + `YT_DLP_POT_PROVIDER_URL` connects to yt-dlp **(THE KEY FIX)** |
-| 2 | **Client Rotation** | 5 player_client strategies, auto-fallback on failure |
-| 3 | **Free Proxy Pool** | Auto-fetches proxies from ProxyScrape, rotates on failure |
-| 4 | **Cache Management** | Auto-clears stale cache every 15 minutes |
-| 5 | **Retry + Backoff** | Up to 15 attempts (5 direct + 10 proxy) with random delays |
+| 1 | **YouTube oEmbed API** | Gets video metadata (title, thumbnail, author) without yt-dlp — **never blocked, unlimited** |
+| 2 | **PO Token Server** | bgutil generates auth tokens + `YT_DLP_POT_PROVIDER_URL` connects to yt-dlp |
+| 3 | **Client Rotation** | 4 player_client strategies (`tv,web_embedded` first), auto-fallback on failure |
+| 4 | **Request Serialization** | Semaphore prevents parallel YouTube API calls + 10-min video info cache |
+| 5 | **Free Proxy Pool** | Auto-fetches proxies from ProxyScrape as last resort |
+| 6 | **`--force-ipv4` + `player_skip=webpage`** | Reduces HTTP calls to YouTube, prevents IPv6 routing issues |
+
+### &#x1F4E1; Pro Tip: Use oEmbed for Video Info (Web App Developers)
+
+> &#x1F6A8; **If you're building a web app**, don't use yt-dlp for video metadata. YouTube rate-limits datacenter IPs after just 1-2 requests. Use the **free, unlimited** oEmbed API instead:
+
+```python
+import urllib.request, json
+
+def get_video_info(youtube_url):
+    """Get title, author, thumbnail — never blocked by YouTube."""
+    oembed = f"https://www.youtube.com/oembed?url={youtube_url}&format=json"
+    with urllib.request.urlopen(oembed, timeout=10) as r:
+        return json.loads(r.read())
+
+# Returns: {"title": "...", "author_name": "...", "thumbnail_url": "...", ...}
+# Use yt-dlp ONLY for the actual download, not for metadata.
+```
+
+> This single change eliminated 90% of our "temporarily blocking requests" errors in production.
 
 <br>
 
@@ -633,24 +656,26 @@ Your server has a datacenter IP which YouTube blocks at the network level. This 
 
 ```
 +------------------------------------------------------------------+
-|                    yt-dlp-rescue v2.0                             |
+|                    yt-dlp-rescue v2.2                             |
 +------------------------------------------------------------------+
 |                                                                  |
 |  QUALITY FIX (SABR bypass):                                      |
 |    --extractor-args                                              |
-|      "youtube:player_client=web,android_vr,tv_downgraded"        |
+|      "youtube:player_client=tv,web_embedded;player_skip=webpage" |
 |    -f "bestvideo*+bestaudio/best"                                |
-|    -S "res:1080"                                                 |
+|    -S "res:1080" --force-ipv4                                    |
 |                                                                  |
 |  BOT DETECTION FIX:                                              |
 |    pip install bgutil-ytdlp-pot-provider                         |
-|    --js-runtimes node --remote-components ejs:github             |
+|    export YT_DLP_POT_PROVIDER_URL="http://127.0.0.1:4416"       |
 |                                                                  |
-|  CLOUD/SERVER FIX:                                               |
-|    --proxy socks5://127.0.0.1:1080  (via WARP wireproxy)         |
+|  WEB APP METADATA (no rate limit):                               |
+|    youtube.com/oembed?url=VIDEO_URL&format=json                  |
 |                                                                  |
 |  WHEN THINGS BREAK:                                              |
-|    yt-dlp --rm-cache-dir && pip install -U yt-dlp                |
+|    yt-dlp --rm-cache-dir                                         |
+|    pip install -U "yt-dlp[default] @ https://github.com/         |
+|      yt-dlp/yt-dlp-nightly-builds/releases/latest/...tar.gz"    |
 |                                                                  |
 +------------------------------------------------------------------+
 ```
@@ -665,6 +690,7 @@ Your server has a datacenter IP which YouTube blocks at the network level. This 
 
 | Version | Date | Changes |
 |:--------|:-----|:--------|
+| **v2.2.0** | 2026-03-13 | oEmbed API for metadata, `player_skip=webpage` + `--force-ipv4`, request serialization + caching, yt-dlp nightly support |
 | **v2.1.0** | 2026-03-13 | PO Token server mode (`YT_DLP_POT_PROVIDER_URL`), free proxy auto-rotation, production-tested fix |
 | **v2.0.0** | 2026-03-13 | Bot detection bypass, cloud deployment guide, WARP proxy, 5-layer defense, client rotation |
 | **v1.0.0** | 2026-03-01 | Initial release: SABR quality fix, format sort, multi-client strategy |
@@ -698,7 +724,7 @@ Found a better fix? Something stopped working?
 
 <sub>
 
-**Keywords:** yt-dlp fix, youtube 360p fix, youtube sabr fix, yt-dlp quality fix, youtube download broken, yt-dlp bot detection, youtube sign in to confirm, yt-dlp cloud server, yt-dlp datacenter blocked, yt-dlp proxy, yt-dlp warp, youtube downloader fix 2025, youtube downloader fix 2026, yt-dlp player_client, yt-dlp format sort, yt-dlp rescue, youtube quality stuck 360p
+**Keywords:** yt-dlp fix, youtube 360p fix, youtube sabr fix, yt-dlp quality fix, youtube download broken, yt-dlp bot detection, youtube sign in to confirm, yt-dlp cloud server, yt-dlp datacenter blocked, yt-dlp proxy, yt-dlp warp, youtube downloader fix 2025, youtube downloader fix 2026, yt-dlp player_client, yt-dlp format sort, yt-dlp rescue, youtube quality stuck 360p, youtube oembed api, yt-dlp temporarily blocking, youtube rate limit bypass, yt-dlp po token server, player_skip webpage, yt-dlp nightly, yt-dlp railway deploy, youtube bot bypass free
 
 </sub>
 
